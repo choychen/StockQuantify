@@ -8,11 +8,14 @@ from plotly.subplots import make_subplots
 # 1. 頁面配置
 st.set_page_config(page_title="動態量化策略回測系統", layout="wide")
 
-# 2. 注入 HTML/CSS：強制允許手機網頁進行雙指縮放 (user-scalable=yes)
+# 2. 注入手機手勢解鎖與觸控優化 CSS
 st.markdown("""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <style>
-        .stPlotlyChart { touch-action: none; } /* 將手勢完全交給 Plotly 圖表處理 */
+        /* 解除手機瀏覽器對 Plotly 圖表的拉動攔截，允許雙指捏合與單指滑動 */
+        .stPlotlyChart > div {
+            touch-action: pan-x pan-y !important;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -41,7 +44,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在加載數據並配置手機雙指手勢..."):
+    with st.spinner("正在加載數據並配置手機原生手勢..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -138,7 +141,7 @@ if ticker:
                 col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
 
                 # ==========================================
-                # 圖表繪製與手機手勢適應
+                # 圖表繪製：強制切換為 Pan（手勢平移/雙指縮放）
                 # ==========================================
                 fig = make_subplots(
                     rows=2, cols=1, 
@@ -193,9 +196,10 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
                 ), row=2, col=1)
 
+                # 關鍵修改：dragmode="pan" 徹底關閉單指畫框放大，改為手勢滑動/縮放
                 fig.update_layout(
                     hovermode="x unified",
-                    dragmode="zoom", # 手機端維持 zoom 或 pan
+                    dragmode="pan", 
                     template="plotly_white",
                     height=680,
                     margin=dict(t=80, b=40, l=40, r=30),
@@ -203,14 +207,15 @@ if ticker:
                     xaxis2=dict(rangeslider=dict(visible=True), type="date")
                 )
 
-                # 手機端雙指縮放核心組態 (scrollZoom: True)
+                # Streamlit 手機組態
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
                     config={
-                        'scrollZoom': True,           # 允許手勢/滾輪直接縮放
-                        'doubleClick': 'reset',        # 雙擊立刻還原全景
-                        'displayModeBar': False,       # 隱藏電腦端頂部控制列，避免手機誤觸
+                        'scrollZoom': True,           # 開啟縮放
+                        'doubleClick': 'reset',        # 雙擊還原
+                        'displayModeBar': True,
+                        'modeBarButtonsToRemove': ['select2d', 'lasso2d', 'zoom2d'], # 移除單指畫框按鈕
                         'responsive': True
                     }
                 )
