@@ -5,25 +5,35 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# 1. 頁面配置
 st.set_page_config(page_title="動態量化策略回測系統", layout="wide")
+
+# 2. 注入 HTML/CSS：強制允許手機網頁進行雙指縮放 (user-scalable=yes)
+st.markdown("""
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <style>
+        .stPlotlyChart { touch-action: none; } /* 將手勢完全交給 Plotly 圖表處理 */
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("📈 多因子量化趨勢與風控系統")
 
 # ==========================================
-# 1. 側邊欄設定
+# 側邊欄設定
 # ==========================================
 st.sidebar.header("策略參數設定")
-ticker = st.sidebar.text_input("股票代碼 (Yahoo Finance)", value="601899.SS")
+ticker = st.sidebar.text_input("股票代碼 (Yahoo Finance)", value="000660.KS")
 start_date = st.sidebar.date_input("開始日期", pd.to_datetime("2022-01-01"))
 end_date = st.sidebar.date_input("結束日期", pd.to_datetime("2026-11-06"))
 
 st.sidebar.subheader("風控與手續費")
-stop_loss_pct = st.sidebar.slider("固定止損 (%)", 3.0, 15.0, 8.0) / 100
-trailing_stop_pct = st.sidebar.slider("移動追蹤止盈 (%)", 5.0, 30.0, 12.0) / 100
+stop_loss_pct = st.sidebar.slider("固定止損 (%)", 3.0, 20.0, 12.4) / 100
+trailing_stop_pct = st.sidebar.slider("移動追蹤止盈 (%)", 5.0, 30.0, 15.2) / 100
 buy_cost = st.sidebar.number_input("買入費率 (%)", value=0.05) / 100
 sell_cost = st.sidebar.number_input("賣出費率 (%)", value=0.20) / 100
 
 # ==========================================
-# 2. 數據加載與策略計算
+# 數據加載與策略計算
 # ==========================================
 @st.cache_data(ttl=3600)
 def load_data(symbol, start, end):
@@ -31,7 +41,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在計算策略並配置手機雙指縮放模式..."):
+    with st.spinner("正在加載數據並配置手機雙指手勢..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -42,7 +52,7 @@ if ticker:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-                # 指標計算
+                # 技術指標計算
                 df['SMA_Short'] = df['Close'].rolling(window=20).mean()
                 df['SMA_Long'] = df['Close'].rolling(window=60).mean()
 
@@ -59,7 +69,7 @@ if ticker:
                 df['ATR'] = df['TR'].rolling(window=14).mean()
                 df['ATR_MA'] = df['ATR'].rolling(window=20).mean()
 
-                # 信號與動態倉位
+                # 信號與倉位
                 cond_trend = df['SMA_Short'] > df['SMA_Long']
                 cond_momentum = df['RSI'] > 50
                 cond_volatility = df['ATR'] > df['ATR_MA']
@@ -98,10 +108,8 @@ if ticker:
                                 trade_signals[i] = '觸發固定止損清倉' if hit_hard_stop else '觸發追蹤止盈清倉'
                             else:
                                 pos_diff = target_pos - prev_pos
-                                if pos_diff > 0: 
-                                    cost_series[i] = pos_diff * buy_cost
-                                elif pos_diff < 0: 
-                                    cost_series[i] = abs(pos_diff) * sell_cost
+                                if pos_diff > 0: cost_series[i] = pos_diff * buy_cost
+                                elif pos_diff < 0: cost_series[i] = abs(pos_diff) * sell_cost
                                 current_pos_size = target_pos
                     else:
                         if in_position:
@@ -122,7 +130,6 @@ if ticker:
                 df['Cumulative_Market'] = (1 + df['Market_Return']).cumprod()
                 df['Cumulative_Net'] = (1 + df['Strategy_Net_Return']).cumprod()
 
-                # 關鍵指標卡片
                 mkt_ret = (df['Cumulative_Market'].iloc[-1] - 1) * 100
                 strat_ret = (df['Cumulative_Net'].iloc[-1] - 1) * 100
 
@@ -131,7 +138,7 @@ if ticker:
                 col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
 
                 # ==========================================
-                # 3. 圖表繪製與手機手勢（雙指縮放）設定
+                # 圖表繪製與手機手勢適應
                 # ==========================================
                 fig = make_subplots(
                     rows=2, cols=1, 
@@ -141,7 +148,7 @@ if ticker:
                     subplot_titles=(f"📈 {ticker} 策略與進出場點", "📊 資金持倉水位 (0% ~ 100%)")
                 )
 
-                # 買入持有基準線
+                # 買入持有
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Market'],
                     mode='lines', name='Buy & Hold (死抱)',
@@ -149,7 +156,7 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>買入持有倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 量化策略淨值線
+                # 量化策略
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Net'],
                     mode='lines', name='Quant Strategy (量化)',
@@ -157,24 +164,24 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>策略累積倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 🟢 買入點標註
+                # 🟢 買入點
                 buy_mask = df['Trade_Signal'].str.contains('買入建倉')
                 fig.add_trace(go.Scatter(
                     x=df.index[buy_mask], y=df['Cumulative_Net'][buy_mask],
                     mode='markers', name='🟢 關鍵買入點',
                     marker=dict(symbol='triangle-up', size=12, color='#2ca02c', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][buy_mask],
-                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>說明</b>: %{customdata}<br><b>倍數</b>: %{y:.2f}x<extra></extra>'
+                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>說明</b>: %{customdata}<extra></extra>'
                 ), row=1, col=1)
 
-                # 🔴 清倉點標註
+                # 🔴 清倉點
                 sell_mask = df['Trade_Signal'].str.contains('清倉')
                 fig.add_trace(go.Scatter(
                     x=df.index[sell_mask], y=df['Cumulative_Net'][sell_mask],
                     mode='markers', name='🔴 風控/清倉點',
                     marker=dict(symbol='triangle-down', size=12, color='#d62728', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][sell_mask],
-                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<br><b>倍數</b>: %{y:.2f}x<extra></extra>'
+                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<extra></extra>'
                 ), row=1, col=1)
 
                 # 持倉水位
@@ -186,37 +193,25 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
                 ), row=2, col=1)
 
-                # 佈局優化 (將預設拖拽模式設為 pan，以方便手機雙指與單指滑動)
                 fig.update_layout(
                     hovermode="x unified",
-                    dragmode="pan",  # 設為 pan 以手勢平移/雙指縮放為主
+                    dragmode="zoom", # 手機端維持 zoom 或 pan
                     template="plotly_white",
                     height=680,
                     margin=dict(t=80, b=40, l=40, r=30),
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.03,
-                        xanchor="center",
-                        x=0.5
-                    ),
-                    xaxis2=dict(
-                        rangeslider=dict(visible=True),
-                        type="date"
-                    ),
-                    yaxis_title="累積報酬倍數",
-                    yaxis2_title="倉位 (%)"
+                    legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="center", x=0.5),
+                    xaxis2=dict(rangeslider=dict(visible=True), type="date")
                 )
 
-                # Streamlit 圖表渲染（開啟 scrollZoom 與傳輸自訂 config）
+                # 手機端雙指縮放核心組態 (scrollZoom: True)
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
                     config={
-                        'scrollZoom': True,        # 允許滾輪/雙指手勢直接縮放
-                        'displayModeBar': True,     # 顯示微型控制面板
-                        'modeBarButtonsToRemove': ['lasso2d', 'select2d'], # 移除手機端用不到的複雜選框工具
-                        'responsive': True          # 自動適應手機螢幕寬度
+                        'scrollZoom': True,           # 允許手勢/滾輪直接縮放
+                        'doubleClick': 'reset',        # 雙擊立刻還原全景
+                        'displayModeBar': False,       # 隱藏電腦端頂部控制列，避免手機誤觸
+                        'responsive': True
                     }
                 )
 
