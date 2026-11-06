@@ -43,7 +43,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在重新加載數據與計算..."):
+    with st.spinner("正在加載數據與計算策略..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -136,3 +136,107 @@ if ticker:
                 df['Strategy_Net_Return'] = (df['Market_Return'] * df['Final_Position']) - df['Transaction_Cost']
 
                 df['Cumulative_Market'] = (1 + df['Market_Return']).cumprod()
+                df['Cumulative_Net'] = (1 + df['Strategy_Net_Return']).cumprod()
+
+                mkt_ret = (df['Cumulative_Market'].iloc[-1] - 1) * 100
+                strat_ret = (df['Cumulative_Net'].iloc[-1] - 1) * 100
+
+                col1, col2 = st.columns(2)
+                col1.metric("買入持有報酬率", f"{mkt_ret:.2f}%")
+                col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
+
+                # ==========================================
+                # 圖表繪製
+                # ==========================================
+                fig = make_subplots(
+                    rows=2, cols=1, 
+                    shared_xaxes=True, 
+                    vertical_spacing=0.12,
+                    row_heights=[0.7, 0.3],
+                    subplot_titles=(f"📈 {ticker} 策略波段與進出場點", "📊 資金持倉水位 (0% ~ 100%)")
+                )
+
+                # 1. 買入持有 (row=1)
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['Cumulative_Market'],
+                    mode='lines', name='Buy & Hold (死抱)',
+                    line=dict(color='#cccccc', width=1.5, dash='dot'),
+                    cliponaxis=False,
+                    hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>買入持有倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1)
+
+                # 2. 量化策略 (row=1)
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['Cumulative_Net'],
+                    mode='lines', name='Quant Strategy (量化)',
+                    line=dict(color='#1f77b4', width=2.5),
+                    cliponaxis=False,
+                    hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>策略累積倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1)
+
+                # 🟢 關鍵買入點 (正確落在 row=1)
+                buy_mask = df['Action_Type'] == 'BUY'
+                fig.add_trace(go.Scatter(
+                    x=df.index[buy_mask], y=df['Cumulative_Net'][buy_mask],
+                    mode='markers', name='🟢 關鍵買入點',
+                    marker=dict(symbol='triangle-up', size=13, color='#2ca02c', line=dict(width=1, color='black')),
+                    customdata=df['Trade_Details'][buy_mask],
+                    cliponaxis=False,
+                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>動作</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1)
+
+                # 🔴 風控清倉點 (正確落在 row=1)
+                sell_mask = df['Action_Type'] == 'SELL'
+                fig.add_trace(go.Scatter(
+                    x=df.index[sell_mask], y=df['Cumulative_Net'][sell_mask],
+                    mode='markers', name='🔴 風控/清倉點',
+                    marker=dict(symbol='triangle-down', size=13, color='#d62728', line=dict(width=1, color='black')),
+                    customdata=df['Trade_Details'][sell_mask],
+                    cliponaxis=False,
+                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1)
+
+                # 3. 持倉水位 (row=2)
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['Final_Position'] * 100,
+                    mode='lines', name='持倉水位(%)',
+                    line=dict(color='#2ca02c', width=2, shape='hv'),
+                    fill='tozeroy', fillcolor='rgba(44, 160, 44, 0.15)',
+                    cliponaxis=False,
+                    hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
+                ), row=2, col=1)
+
+                fig.update_yaxes(autorange=True, fixedrange=False, row=1, col=1)
+                fig.update_yaxes(fixedrange=True, range=[0, 105], row=2, col=1)
+
+                # 佈局與手勢配置
+                fig.update_layout(
+                    hovermode="x unified",
+                    dragmode="pan",
+                    template="plotly_white",
+                    height=680,
+                    margin=dict(t=80, b=40, l=40, r=30),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.03,
+                        xanchor="center",
+                        x=0.5
+                    ),
+                    xaxis2=dict(rangeslider=dict(visible=True), type="date")
+                )
+
+                st.plotly_chart(
+                    fig, 
+                    use_container_width=True,
+                    config={
+                        'scrollZoom': True,
+                        'doubleClick': 'reset',
+                        'displayModeBar': False,
+                        'responsive': True
+                    }
+                )
+
+        # 閉合最外層 try 區塊
+        except Exception as e:
+            st.error(f"連線或計算時發生錯誤: {e}")
