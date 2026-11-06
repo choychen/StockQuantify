@@ -8,11 +8,11 @@ from plotly.subplots import make_subplots
 # 1. 頁面配置
 st.set_page_config(page_title="動態量化策略回測系統", layout="wide")
 
-# 2. 注入手機手勢解鎖與觸控優化 CSS
+# 2. 注入手機手勢解鎖與觸控優化 CSS (關鍵：允許雙指縮放，且不干擾頁面)
 st.markdown("""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <style>
-        /* 解除手機瀏覽器對 Plotly 圖表的拉動攔截，允許雙指捏合與單指滑動 */
+        /* 強制允許 Plotly 圖表區域響應雙指捏合縮放與雙向滑動 */
         .stPlotlyChart > div {
             touch-action: pan-x pan-y !important;
         }
@@ -44,7 +44,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在加載數據並配置手機原生手勢..."):
+    with st.spinner("正在加載數據並配置手機原生雙指縮放與動態視圖..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -141,7 +141,7 @@ if ticker:
                 col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
 
                 # ==========================================
-                # 圖表繪製：強制切換為 Pan（手勢平移/雙指縮放）
+                # 圖表繪製：開啟防裁切與 Y 軸自動適應
                 # ==========================================
                 fig = make_subplots(
                     rows=2, cols=1, 
@@ -151,19 +151,21 @@ if ticker:
                     subplot_titles=(f"📈 {ticker} 策略與進出場點", "📊 資金持倉水位 (0% ~ 100%)")
                 )
 
-                # 買入持有
+                # 1. 買入持有
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Market'],
                     mode='lines', name='Buy & Hold (死抱)',
                     line=dict(color='#cccccc', width=1.5, dash='dot'),
+                    cliponaxis=False,  # 關鍵：防止邊界處曲線被切斷
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>買入持有倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 量化策略
+                # 2. 量化策略
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Net'],
                     mode='lines', name='Quant Strategy (量化)',
                     line=dict(color='#1f77b4', width=2.5),
+                    cliponaxis=False,  # 關鍵：防止邊界處曲線被切斷
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>策略累積倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
@@ -174,6 +176,7 @@ if ticker:
                     mode='markers', name='🟢 關鍵買入點',
                     marker=dict(symbol='triangle-up', size=12, color='#2ca02c', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][buy_mask],
+                    cliponaxis=False,
                     hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>說明</b>: %{customdata}<extra></extra>'
                 ), row=1, col=1)
 
@@ -184,22 +187,27 @@ if ticker:
                     mode='markers', name='🔴 風控/清倉點',
                     marker=dict(symbol='triangle-down', size=12, color='#d62728', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][sell_mask],
+                    cliponaxis=False,
                     hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<extra></extra>'
-                ), row=1, col=1)
+                ), row=2, col=1)
 
-                # 持倉水位
+                # 3. 持倉水位
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Final_Position'] * 100,
                     mode='lines', name='持倉水位(%)',
                     line=dict(color='#2ca02c', width=2, shape='hv'),
                     fill='tozeroy', fillcolor='rgba(44, 160, 44, 0.15)',
+                    cliponaxis=False,
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
                 ), row=2, col=1)
 
-                # 關鍵修改：dragmode="pan" 徹底關閉單指畫框放大，改為手勢滑動/縮放
+                # 關鍵設定：Y 軸動態自動放縮 (autorange=True)
+                fig.update_yaxes(autorange=True, fixedrange=False, row=1, col=1)
+                fig.update_yaxes(fixedrange=True, range=[0, 105], row=2, col=1)
+
                 fig.update_layout(
                     hovermode="x unified",
-                    dragmode="pan", 
+                    dragmode="pan",  # 設定為手勢平移模式（手勢/雙指縮放）
                     template="plotly_white",
                     height=680,
                     margin=dict(t=80, b=40, l=40, r=30),
@@ -207,15 +215,14 @@ if ticker:
                     xaxis2=dict(rangeslider=dict(visible=True), type="date")
                 )
 
-                # Streamlit 手機組態
+                # 手機端原生觸控手勢 Config
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
                     config={
-                        'scrollZoom': True,           # 開啟縮放
-                        'doubleClick': 'reset',        # 雙擊還原
-                        'displayModeBar': True,
-                        'modeBarButtonsToRemove': ['select2d', 'lasso2d', 'zoom2d'], # 移除單指畫框按鈕
+                        'scrollZoom': True,           # 開啟雙指與滾輪動態縮放
+                        'doubleClick': 'reset',        # 雙擊螢幕重置畫面
+                        'displayModeBar': False,       # 隱藏電腦版按鈕以防手勢誤觸
                         'responsive': True
                     }
                 )
