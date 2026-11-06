@@ -31,7 +31,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在計算策略並進行視覺化圖層排版..."):
+    with st.spinner("正在計算策略並配置手機雙指縮放模式..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -68,7 +68,7 @@ if ticker:
                 raw_position = np.select([score == 3, score == 2, score == 1], [1.0, 0.6, 0.3], default=0.0)
                 df['Target_Position'] = np.where(cond_trend, raw_position, 0.0)
 
-                # 風控迴圈與關鍵節點過濾
+                # 風控迴圈
                 final_position = np.zeros(len(df))
                 cost_series = np.zeros(len(df))
                 trade_signals = [''] * len(df)
@@ -100,7 +100,6 @@ if ticker:
                                 pos_diff = target_pos - prev_pos
                                 if pos_diff > 0: 
                                     cost_series[i] = pos_diff * buy_cost
-                                    # 為了防止畫面繁雜，微幅調倉不生成標註，只留在數值計算中
                                 elif pos_diff < 0: 
                                     cost_series[i] = abs(pos_diff) * sell_cost
                                 current_pos_size = target_pos
@@ -123,7 +122,7 @@ if ticker:
                 df['Cumulative_Market'] = (1 + df['Market_Return']).cumprod()
                 df['Cumulative_Net'] = (1 + df['Strategy_Net_Return']).cumprod()
 
-                # 指標數據呈現
+                # 關鍵指標卡片
                 mkt_ret = (df['Cumulative_Market'].iloc[-1] - 1) * 100
                 strat_ret = (df['Cumulative_Net'].iloc[-1] - 1) * 100
 
@@ -132,17 +131,17 @@ if ticker:
                 col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
 
                 # ==========================================
-                # 3. 雙圖表繪製 (解決重疊與佈局錯位)
+                # 3. 圖表繪製與手機手勢（雙指縮放）設定
                 # ==========================================
                 fig = make_subplots(
                     rows=2, cols=1, 
                     shared_xaxes=True, 
-                    vertical_spacing=0.12,  # 加大兩圖之間的垂直間距
+                    vertical_spacing=0.12,
                     row_heights=[0.7, 0.3],
-                    subplot_titles=(f"📈 {ticker} 策略波段與關鍵進出場點", "📊 資金持倉水位比例 (0% ~ 100%)")
+                    subplot_titles=(f"📈 {ticker} 策略與進出場點", "📊 資金持倉水位 (0% ~ 100%)")
                 )
 
-                # 主圖：買入持有基準線
+                # 買入持有基準線
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Market'],
                     mode='lines', name='Buy & Hold (死抱)',
@@ -150,7 +149,7 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>買入持有倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 主圖：量化策略淨值線
+                # 量化策略淨值線
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Net'],
                     mode='lines', name='Quant Strategy (量化)',
@@ -158,27 +157,27 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>策略累積倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 主圖標註：僅保留「關鍵建倉點」（首次進場）
+                # 🟢 買入點標註
                 buy_mask = df['Trade_Signal'].str.contains('買入建倉')
                 fig.add_trace(go.Scatter(
                     x=df.index[buy_mask], y=df['Cumulative_Net'][buy_mask],
                     mode='markers', name='🟢 關鍵買入點',
-                    marker=dict(symbol='triangle-up', size=13, color='#2ca02c', line=dict(width=1, color='black')),
+                    marker=dict(symbol='triangle-up', size=12, color='#2ca02c', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][buy_mask],
-                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>動作說明</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>說明</b>: %{customdata}<br><b>倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 主圖標註：僅保留「清倉離場點」
+                # 🔴 清倉點標註
                 sell_mask = df['Trade_Signal'].str.contains('清倉')
                 fig.add_trace(go.Scatter(
                     x=df.index[sell_mask], y=df['Cumulative_Net'][sell_mask],
                     mode='markers', name='🔴 風控/清倉點',
-                    marker=dict(symbol='triangle-down', size=13, color='#d62728', line=dict(width=1, color='black')),
+                    marker=dict(symbol='triangle-down', size=12, color='#d62728', line=dict(width=1, color='black')),
                     customdata=df['Trade_Signal'][sell_mask],
-                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>離場原因</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<br><b>倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 子圖：持倉水位
+                # 持倉水位
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Final_Position'] * 100,
                     mode='lines', name='持倉水位(%)',
@@ -187,16 +186,17 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
                 ), row=2, col=1)
 
-                # 佈局修復重點：將 Legend 放到下邊界外或右側，防止擋住 Subtitle
+                # 佈局優化 (將預設拖拽模式設為 pan，以方便手機雙指與單指滑動)
                 fig.update_layout(
                     hovermode="x unified",
+                    dragmode="pan",  # 設為 pan 以手勢平移/雙指縮放為主
                     template="plotly_white",
                     height=680,
-                    margin=dict(t=80, b=40, l=60, r=40), # 頂部預留 80px 避免標題被遮蓋
+                    margin=dict(t=80, b=40, l=40, r=30),
                     legend=dict(
-                        orientation="h",       # 水平擺放圖例
+                        orientation="h",
                         yanchor="bottom",
-                        y=1.03,                # 放到頂部上方
+                        y=1.03,
                         xanchor="center",
                         x=0.5
                     ),
@@ -205,10 +205,20 @@ if ticker:
                         type="date"
                     ),
                     yaxis_title="累積報酬倍數",
-                    yaxis2_title="倉位比例 (%)"
+                    yaxis2_title="倉位 (%)"
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                # Streamlit 圖表渲染（開啟 scrollZoom 與傳輸自訂 config）
+                st.plotly_chart(
+                    fig, 
+                    use_container_width=True,
+                    config={
+                        'scrollZoom': True,        # 允許滾輪/雙指手勢直接縮放
+                        'displayModeBar': True,     # 顯示微型控制面板
+                        'modeBarButtonsToRemove': ['lasso2d', 'select2d'], # 移除手機端用不到的複雜選框工具
+                        'responsive': True          # 自動適應手機螢幕寬度
+                    }
+                )
 
         except Exception as e:
             st.error(f"連線或計算時發生錯誤: {e}")
