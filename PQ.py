@@ -8,11 +8,10 @@ from plotly.subplots import make_subplots
 # 1. 頁面配置
 st.set_page_config(page_title="動態量化策略回測系統", layout="wide")
 
-# 2. 注入手機手勢解鎖與觸控優化 CSS (關鍵：允許雙指縮放，且不干擾頁面)
+# 2. 注入手機手勢解鎖與觸控優化 CSS
 st.markdown("""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <style>
-        /* 強制允許 Plotly 圖表區域響應雙指捏合縮放與雙向滑動 */
         .stPlotlyChart > div {
             touch-action: pan-x pan-y !important;
         }
@@ -44,7 +43,7 @@ def load_data(symbol, start, end):
     return data
 
 if ticker:
-    with st.spinner("正在加載數據並配置手機原生雙指縮放與動態視圖..."):
+    with st.spinner("正在重新對齊進出場點位並優化圖表..."):
         try:
             df = load_data(ticker, start_date, end_date)
             
@@ -72,7 +71,7 @@ if ticker:
                 df['ATR'] = df['TR'].rolling(window=14).mean()
                 df['ATR_MA'] = df['ATR'].rolling(window=20).mean()
 
-                # 信號與倉位
+                # 信號與動態倉位
                 cond_trend = df['SMA_Short'] > df['SMA_Long']
                 cond_momentum = df['RSI'] > 50
                 cond_volatility = df['ATR'] > df['ATR_MA']
@@ -81,10 +80,11 @@ if ticker:
                 raw_position = np.select([score == 3, score == 2, score == 1], [1.0, 0.6, 0.3], default=0.0)
                 df['Target_Position'] = np.where(cond_trend, raw_position, 0.0)
 
-                # 風控迴圈
+                # 精確風控迴圈與點位紀錄
                 final_position = np.zeros(len(df))
                 cost_series = np.zeros(len(df))
-                trade_signals = [''] * len(df)
+                action_type = [''] * len(df)  # 專門記錄 買入 / 平倉 狀態
+                trade_details = [''] * len(df)
                 
                 in_position, entry_price, peak_price, current_pos_size = False, 0.0, 0.0, 0.0
                 close_prices = df['Close'].values
@@ -97,18 +97,22 @@ if ticker:
 
                     if target_pos > 0:
                         if not in_position:
+                            # 🟢 首次開倉進場
                             in_position, entry_price, peak_price, current_pos_size = True, price, price, target_pos
                             cost_series[i] = current_pos_size * buy_cost
-                            trade_signals[i] = f'買入建倉 ({int(target_pos*100)}% 倉位)'
+                            action_type[i] = 'BUY'
+                            trade_details[i] = f'首次建倉進場 ({int(target_pos*100)}% 倉位)'
                         else:
                             peak_price = max(peak_price, price)
                             hit_hard_stop = price < entry_price * (1 - stop_loss_pct)
                             hit_trailing_stop = price < peak_price * (1 - trailing_stop_pct)
 
                             if hit_hard_stop or hit_trailing_stop:
+                                # 🔴 觸發止損/止盈離場
                                 in_position, current_pos_size = False, 0.0
                                 cost_series[i] = prev_pos * sell_cost
-                                trade_signals[i] = '觸發固定止損清倉' if hit_hard_stop else '觸發追蹤止盈清倉'
+                                action_type[i] = 'SELL'
+                                trade_details[i] = '觸發固定止損清倉' if hit_hard_stop else '觸發追蹤止盈清倉'
                             else:
                                 pos_diff = target_pos - prev_pos
                                 if pos_diff > 0: cost_series[i] = pos_diff * buy_cost
@@ -116,9 +120,11 @@ if ticker:
                                 current_pos_size = target_pos
                     else:
                         if in_position:
+                            # 🔴 趨勢結束清倉
                             in_position, current_pos_size = False, 0.0
                             cost_series[i] = prev_pos * sell_cost
-                            trade_signals[i] = '趨勢轉空清倉'
+                            action_type[i] = 'SELL'
+                            trade_details[i] = '趨勢轉空清倉'
                         else:
                             current_pos_size = 0.0
 
@@ -126,7 +132,9 @@ if ticker:
 
                 df['Final_Position'] = final_position
                 df['Transaction_Cost'] = cost_series
-                df['Trade_Signal'] = trade_signals
+                df['Action_Type'] = action_type
+                df['Trade_Details'] = trade_details
+                
                 df['Market_Return'] = df['Close'].pct_change()
                 df['Strategy_Net_Return'] = (df['Market_Return'] * df['Final_Position']) - df['Transaction_Cost']
 
@@ -141,57 +149,57 @@ if ticker:
                 col2.metric("量化策略淨報酬率", f"{strat_ret:.2f}%", delta=f"{strat_ret - mkt_ret:.2f}%")
 
                 # ==========================================
-                # 圖表繪製：開啟防裁切與 Y 軸自動適應
+                # 圖表繪製：完全修正座標軸與訊號對齊
                 # ==========================================
                 fig = make_subplots(
                     rows=2, cols=1, 
                     shared_xaxes=True, 
                     vertical_spacing=0.12,
                     row_heights=[0.7, 0.3],
-                    subplot_titles=(f"📈 {ticker} 策略與進出場點", "📊 資金持倉水位 (0% ~ 100%)")
+                    subplot_titles=(f"📈 {ticker} 策略波段與正確進出場點", "📊 資金持倉水位 (0% ~ 100%)")
                 )
 
-                # 1. 買入持有
+                # 1. 買入持有基準線 (主圖 row=1)
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Market'],
                     mode='lines', name='Buy & Hold (死抱)',
                     line=dict(color='#cccccc', width=1.5, dash='dot'),
-                    cliponaxis=False,  # 關鍵：防止邊界處曲線被切斷
+                    cliponaxis=False,
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>買入持有倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 2. 量化策略
+                # 2. 量化策略淨值線 (主圖 row=1)
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Cumulative_Net'],
                     mode='lines', name='Quant Strategy (量化)',
                     line=dict(color='#1f77b4', width=2.5),
-                    cliponaxis=False,  # 關鍵：防止邊界處曲線被切斷
+                    cliponaxis=False,
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>策略累積倍數</b>: %{y:.2f}x<extra></extra>'
                 ), row=1, col=1)
 
-                # 🟢 買入點
-                buy_mask = df['Trade_Signal'].str.contains('買入建倉')
+                # 🟢 關鍵買入點 (精確繪製在主圖 row=1)
+                buy_mask = df['Action_Type'] == 'BUY'
                 fig.add_trace(go.Scatter(
                     x=df.index[buy_mask], y=df['Cumulative_Net'][buy_mask],
                     mode='markers', name='🟢 關鍵買入點',
-                    marker=dict(symbol='triangle-up', size=12, color='#2ca02c', line=dict(width=1, color='black')),
-                    customdata=df['Trade_Signal'][buy_mask],
+                    marker=dict(symbol='triangle-up', size=13, color='#2ca02c', line=dict(width=1, color='black')),
+                    customdata=df['Trade_Details'][buy_mask],
                     cliponaxis=False,
-                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>說明</b>: %{customdata}<extra></extra>'
-                ), row=1, col=1)
+                    hovertemplate='<b>🟢 買入日期</b>: %{x|%Y-%m-%d}<br><b>動作</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1) # 修正為 row=1
 
-                # 🔴 清倉點
-                sell_mask = df['Trade_Signal'].str.contains('清倉')
+                # 🔴 風控清倉點 (精確繪製在主圖 row=1，徹底解決掉到子圖的 Bug)
+                sell_mask = df['Action_Type'] == 'SELL'
                 fig.add_trace(go.Scatter(
                     x=df.index[sell_mask], y=df['Cumulative_Net'][sell_mask],
                     mode='markers', name='🔴 風控/清倉點',
-                    marker=dict(symbol='triangle-down', size=12, color='#d62728', line=dict(width=1, color='black')),
-                    customdata=df['Trade_Signal'][sell_mask],
+                    marker=dict(symbol='triangle-down', size=13, color='#d62728', line=dict(width=1, color='black')),
+                    customdata=df['Trade_Details'][sell_mask],
                     cliponaxis=False,
-                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<extra></extra>'
-                ), row=2, col=1)
+                    hovertemplate='<b>🔴 出場日期</b>: %{x|%Y-%m-%d}<br><b>原因</b>: %{customdata}<br><b>當時倍數</b>: %{y:.2f}x<extra></extra>'
+                ), row=1, col=1) # 修正為 row=1
 
-                # 3. 持倉水位
+                # 3. 持倉水位 (子圖 row=2)
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df['Final_Position'] * 100,
                     mode='lines', name='持倉水位(%)',
@@ -201,31 +209,14 @@ if ticker:
                     hovertemplate='<b>日期</b>: %{x|%Y-%m-%d}<br><b>當前持倉</b>: %{y:.0f}%<extra></extra>'
                 ), row=2, col=1)
 
-                # 關鍵設定：Y 軸動態自動放縮 (autorange=True)
+                # Y 軸自動放縮與範圍設定
                 fig.update_yaxes(autorange=True, fixedrange=False, row=1, col=1)
                 fig.update_yaxes(fixedrange=True, range=[0, 105], row=2, col=1)
 
                 fig.update_layout(
                     hovermode="x unified",
-                    dragmode="pan",  # 設定為手勢平移模式（手勢/雙指縮放）
+                    dragmode="pan",
                     template="plotly_white",
                     height=680,
                     margin=dict(t=80, b=40, l=40, r=30),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="center", x=0.5),
-                    xaxis2=dict(rangeslider=dict(visible=True), type="date")
-                )
-
-                # 手機端原生觸控手勢 Config
-                st.plotly_chart(
-                    fig, 
-                    use_container_width=True,
-                    config={
-                        'scrollZoom': True,           # 開啟雙指與滾輪動態縮放
-                        'doubleClick': 'reset',        # 雙擊螢幕重置畫面
-                        'displayModeBar': False,       # 隱藏電腦版按鈕以防手勢誤觸
-                        'responsive': True
-                    }
-                )
-
-        except Exception as e:
-            st.error(f"連線或計算時發生錯誤: {e}")
+                    legend=dict(orientation="
